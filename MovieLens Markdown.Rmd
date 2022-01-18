@@ -1,0 +1,340 @@
+---
+title: "Movielens Capstone Project"
+author: "Ray Z"
+date: "1/17/2021"
+output: pdf_document
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=60), tidy=TRUE)
+```
+
+# Movielens Capstone Project
+
+## Introduction
+
+We will create a movie recommendation system using the 10M version of the MovieLens dataset in the in dslabs package, compiled by the GroupLens research lab. This data consists of 10 million ratings and 100,000 tag applications applied to 10,000 movies by 72,000 user, according to the [GroupLens website](https://grouplens.org/datasets/movielens/10m/). The goal of this project is to predict the movie ratings of an individual with preferences as suggested by the predictor variables in the dataset.
+
+We will train a predictive machine learning algorithm in the training subset to predict movie ratings in the validation set, treating this problem as a regression problem. We will first load the required packages, clean and explore the data, and then fit various supervised learning algorithms to predict a user's rating given his/her preferences. To evaluate how close our predictions are to values in the test set, we will be using the Root Mean Square Error (RMSE).
+
+
+## Methods/Analysis
+
+### Load Packages
+
+```{r}
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(stringi)) install.packages("stringi", repos = "http://cran.us.r-project.org")
+
+library(ggplot2)
+library(lubridate)
+library(stringi)
+```
+
+### Data Cleaning
+
+We can run the provided code to load and clean the dataset.
+
+```{r}
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 3.6 or earlier:
+# movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+#                                            title = as.character(title),
+#                                            genres = as.character(genres))
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                            title = as.character(title),
+                                            genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+      semi_join(edx, by = "movieId") %>%
+      semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+### Examination/Exploratory Data Analysis
+
+Before fit a model, we can first examine the data.
+
+```{r}
+head(edx)
+glimpse(edx)
+n_distinct(edx$movieId)
+n_distinct(edx$genres)
+n_distinct(edx$userId)
+```
+As we can see, we have a data table with the six factors userId, movieId, rating, timestamp, title, and genres. After counting using n_distinct, we  have 10,677 distinct movies, 797 distinct genres, 69,878 distinct users. Additionally, userId, movieId, timestamp, and rating are quantitative variables; title and genres are categorical.
+
+Now we can explore relationships between the aforementioned variables using ggplot2. We can observe a few trends for each variable to help us hypothesize which variables are most predictive of movie preference.
+
+#### userId
+
+```{r}
+edx %>%
+  count(userId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 50, fill  = "red", color = "black") +
+  scale_x_log10()+ 
+  ggtitle("Number of Ratings by userId")
+
+```
+The histogram above is skewed right. This could suggest a few relationships. It is possible that some users use the rating site to only post a few good or bad reviews, which can affect the prediction. it is also possible that some users see more movies than others, also affecting the prediction.
+
+#### movieId
+
+```{r}
+edx %>%
+  count(movieId) %>%
+  ggplot(aes(n)) +
+  geom_histogram(bins = 50, fill  = "red", color = "black") +
+  scale_x_log10() + 
+  ggtitle("Number of Ratings by movieId")
+```
+Some movies in the histogram seem to be outliers as they have only been rated a few times, and could be less significant than those with more reviews. Note that this is log10 scaled.
+
+#### timestamp
+
+We can use the stringi package and regex to locate the year sequence in the title column of each instance. Since some titles have parenthesis/years, we can use str_sub (substring) additionally to make it more accurate. Let's do this for both the test set and the train set.
+
+```{r}
+edx <- mutate(edx, age = 2021-as.numeric(stri_extract(str_sub(edx$title,-5,-1), regex = "(\\d{4})", comments = TRUE)))
+validation <- mutate(validation, age = 2021-as.numeric(stri_extract(str_sub(validation$title, -5, -1), regex =  "(\\d{4})", comments = TRUE)))
+
+edx %>%
+  group_by(age) %>%
+  summarize(rating = mean(rating)) %>%
+  ggplot(aes(age, rating)) +
+  labs(title="Movie Age vs Rating", x="Age", y="Rating") +
+  geom_point()
+```
+It appears from this plot that more recent movies are generally rated lower than older ones. Additionally, there are a few outliers in which older movies were rated lower. This seems to be a fairly significant trend.
+
+#### rating
+
+```{r}
+qplot(as.vector(edx$rating)) +
+  ggtitle("Number of Ratings of Each Rating")
+```
+The majority of the movies fall under whole numbers ranging from 0.5 to 5 (inclusive), although there are a few increments of 0.5.
+
+#### Genre
+
+Genre is a categorical variable with many different states. It can be hypothesized that users' interest in a genre would affect their rating. We will examine the distribution of rankings below.
+
+```{r}
+edx %>% 
+  separate_rows(genres, sep = "\\|") %>%
+  group_by(genres) %>%
+  summarize(genre_rating = mean(rating)) %>%
+  arrange(desc(genre_rating)) %>%
+  ggplot(aes(reorder(genres, genre_rating), genre_rating)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Highest Average Rating per Genre")
+
+```
+Some movies appear to be more popular than others, which we can take into account in our analysis.
+
+### Measurement of Accuracy
+
+For this recommendation system, we will be using RMSE to gauge the accuracy of our fitting algorithm. We can define a method that will do just this.
+
+```{r}
+RMSE <- function(model, observed){
+  sqrt(mean((model-observed)^2))
+}
+```
+
+### Modeling Approach - Regression Problem
+
+We will use a regression approach toward this regression recommender system. RMSE will penalize larger deviations from the true value, so we will try to minimize this.
+
+For our first model, we can first calculate d, which is simply the mean of all reviews, and then calculate the movie effect; movies that are liked a lot by other users are likely to be liked by a new user, which is an example of user-based collaborative filtering. We will incorporate item-based collaborative filtering in our second model which adds the effect of the specific user based on his preferences of other movies. As this employs the ratings of other movies of a specific user to predict that user's preference of a new movie, this is content-based. In our third model, we will use the timestamp variable to predict the effect of age on the user's preference of the movie. As this uses a feature based on the movie itself, this is content based filtering, as it uses features of the item itself.
+
+### Model 1 - Mean + Movie Effect
+
+Let's begin by calculating the mean.
+
+```{r}
+d <- mean(edx$rating)
+d
+```
+The mean is 3.5125.
+
+```{r}
+b_i <- edx %>% 
+  group_by(movieId) %>%
+  summarize(movie_effect = mean(rating-d))
+b_i %>% qplot(movie_effect, geom = "histogram", data = ., fill = I("red"), col = I("black"), main = "Distribution of Movie Effect", xlab = "Movie Effect", ylab = "Count")
+```
+This appears to be skewed left and unimodal. Some movies have a strong negative effect on ratings.
+
+Now we can apply this model to the validation set and calculate the RMSE to determine the accuracy of the model.
+```{r}
+predicted_ratings_model_1 <- d + validation %>%
+  left_join(b_i, by = "movieId") %>%
+  pull(movie_effect)
+
+rmse_model_1 <- RMSE(predicted_ratings_model_1, validation$rating)
+rmse_model_1
+```
+This baseline modeling approach using only the movie effect gives and error of 0.9439. We can decrease this by incorporating more effects.
+
+### Model 2 - Mean + Movie Effect + User Effect
+
+Different users can also add bias. Some users rate movies worse or better, and we will incorporate this into the second model. We will first generate the user effect due to their past reviews.
+
+```{r}
+b_u <- edx %>% 
+  left_join(b_i, by = "movieId") %>%
+  group_by(userId) %>%
+  summarize(user_effect = mean(rating-d-movie_effect))
+b_u %>% qplot(user_effect, geom ="histogram", data = ., fill = I("red"), col=I("black"), main = "Distribution of User Effect", xlab = "User Effect", ylab = "Count")
+```
+
+This appears to be unimodal, suggesting that there exists users who rate both above and below the mean roughly evenly. We can see whether the user effect has an impact on the RMSE in the code below.
+
+```{r}
+predicted_ratings_model_2 <- validation %>%
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  mutate(prediction = d + movie_effect + user_effect)
+
+rmse_model_2 <- RMSE(predicted_ratings_model_2$prediction, validation$rating)
+rmse_model_2
+```
+
+### Model 3 - Mean + Movie + User + Age effects
+
+The age of the movie can also influence the rating of the movie, as suggested in the scatterplot of age versus rating above.
+
+```{r}
+b_a <- edx %>% 
+  left_join(b_i, by = "movieId") %>% 
+  left_join(b_u, by = "userId") %>%
+  group_by(age) %>%
+  summarize(age_effect = mean(rating-d-movie_effect-user_effect))
+b_a %>% qplot(age_effect, geom ="histogram", data = ., fill = I("red"), col=I("black"), main = "Distribution of Age Effect", xlab = "Age Effect", ylab = "Count")
+```
+This distribution is skewed to the right with a mean above 0. Movies with greater age tend to be rated more favorably.
+
+```{r}
+predicted_ratings_model_3 <- validation %>%
+  left_join(b_i, by = "movieId") %>%
+  left_join(b_u, by = "userId") %>%
+  left_join(b_a, by = "age") %>%
+  mutate(prediction = d + movie_effect + user_effect + age_effect)
+
+rmse_model_3 <- RMSE(predicted_ratings_model_3$prediction, validation$rating)
+rmse_model_3
+```
+We see some improvement by factoring in the age, however the RMSE (given a distribution from 0.5 to 5 stars) of 0.865 is still rather high. So far, we have been fitting multivariate regressions to the edx set. Let's try some more advanced algorithms.
+
+### Model 4 - Regression Tree
+
+As the relationship between our predictor variables and response variable is likely nonlinear, we can apply the non linear method of classification and regression trees (CART). As we are trying to predict the ordinal variable of movie ratings, a regression tree is suitable for this task, and we will use the rpart package for recursive partitioning of a decision tree. We can first build and prune the tree given an initial complexity parameter 0.001 (keep creating splits if the r^2 value increases more than this parameter). The optimum parameter will then be found and used to prune the tree.
+
+```{r}
+if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+library(rpart)
+
+# build a rpart decision tree noting that the control continues to split if the increase in r^2 is greater than the complexity parameter cp
+model_4 <- rpart(rating ~ userId + movieId + age, control=rpart.control(cp=.001), data = edx)
+bestcp <- model_4$cptable[which.min(model_4$cptable[,"xerror"]),"CP"] # identify the best complexity parameter
+model_4 <- prune(model_4, cp = bestcp) # produce pruned tree based on the best complexity parameter
+```
+We can then plot the splits of the tree using the rpart.plot package.
+```{r}
+if(!require(rpart.plot)) install.packages("rpart.plot", repos = "http://cran.us.r-project.org")
+library(rpart.plot)
+
+# plot the rpart model using the function in rpart.plot
+prp(model_4, roundint=F, digits=3)
+```
+
+We will use this model to predict ratings for the validation data and analyze the RMSE.
+```{r}
+dt_pred <- predict(model_4, newdata=validation)
+rmse_model_4 <- RMSE(dt_pred, validation$rating)
+rmse_model_4
+```
+
+### Model 5 - Matrix Factorization Using Recosystem
+
+Another collaborative filtering mechanism is matrix factorization, which factorizes the data frame we are working with into the product of two matrices with lower rank. We can use the recosystem recommender system package for this. For the opts parameter in recosystem's train function, we can control the number of latent factors, the regularization parameter lambda, number of iterations, and more. Too few latent factors will not be able to predict the validation set, while too many would likely overfit, so we will go with 20. We can go with the default values of L1 and L2 regularization, which address overfitting. We can leave the number of iterations default to avoid taking too long on slower computers. We will set verbose = FALSE to avoid showing too much detailed information.
+
+```{r}
+if(!require(recosystem)) install.packages("recosystem", repos = "http://cran.us.r-project.org")
+library(recosystem)
+
+r <- Reco()
+train_data <- data_memory(edx$userId, edx$movieId, edx$rating)
+test_data <- data_memory(validation$userId, validation$movieId, validation$rating)
+r$train(train_data, opts = list(dim = 20, verbose = FALSE))
+mf_pred <- r$predict(test_data, out_memory())
+rmse_model_5 <- RMSE(mf_pred, validation$rating)
+rmse_model_5
+```
+This RMSE is significantly lower than the other methods.
+
+
+## Results
+
+Initially we used the expected value of all ratings (3.5125) and mean rating of a movie  to generate a predicted value of a rating, giving us a RMSE of 0.94. We then added the mean ratings of individual users giving us the RMSE of 0.86. After adding the age effect the RMSE decreased slightly but remained at 0.86 after rounding. Using all of these predictive variables combines user-based and item-based collaborative filtering, as well as content-based filtering; ratings are suggested as a function of how all users rated a movie (movie effect/item-based collaborative filtering), as a function of how the user likes movies in general (user effect/user-based collaborative filtering), and as a function of the movie itself (content-based). We threw in some more complex algorithms used for regression type problems, including decision tree and matrix factorization, resulting in our lowest RMSE being found using matrix factorization.
+
+```{r}
+tab <- matrix(c(rmse_model_1, rmse_model_2, rmse_model_3, rmse_model_4, rmse_model_5), ncol = 1, byrow = TRUE)
+colnames(tab) <- "Root Mean Squared Error"
+rownames(tab) <- c("Movie Effect", "User + Movie Effect", "User + Movie + Age Effect", "Decision Tree", "Matrix Factorization")
+tab <- as.table(tab)
+tab
+```
+
+
+## Conclusion
+
+In this project, we used the 10M MovieLens dataset and fitted a recommendation system on the edx test set. We measured the accuracy of algorithms tested using root-mean-square error. We trained a recommendation system based on the movie effect, movie + user effect, movie + user + age effect, regression tree, and matrix factorization. We were able to generate a final RMSE of 0.82, far lower than our target value of 0.8649.
+
+Movie recommendation systems have been a textbook example of recommender systems, publicized particularly by the Netflix Prize. While we worked with four main factors in this inquiry: "userId", "movieId", "rating", "timestamp" further work toward movie recommender systems could evaluate the "title" and "genres", perhaps performing text mining or encoding genres to be analyzed as categories. Further analysis could also look at the relationship between various subcategories of movies (i.e. some movies could be longer/shorter or there could be sequels that users enjoy).
