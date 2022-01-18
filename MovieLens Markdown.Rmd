@@ -14,9 +14,18 @@ knitr::opts_chunk$set(echo = TRUE, tidy.opts=list(width.cutoff=60), tidy=TRUE)
 
 ## Introduction
 
-We will create a movie recommendation system using the 10M version of the MovieLens dataset in the in dslabs package, compiled by the GroupLens research lab. This data consists of 10 million ratings and 100,000 tag applications applied to 10,000 movies by 72,000 users, according to the [GroupLens website](https://grouplens.org/datasets/movielens/10m/). The goal of this project is to predict the movie ratings of an individual with preferences as suggested by the predictor variables in the dataset.
+For this assignment, we will create a movie recommendation system using the 10M version of the MovieLens dataset in the in dslabs package, compiled by the GroupLens research lab. This data consists of 10 million ratings applied to 10,000 movies by 72,000 users, according to the [GroupLens website](https://grouplens.org/datasets/movielens/10m/). Variables in the dataset include:
 
-We will train a predictive machine learning algorithm in the training subset to predict movie ratings in the validation set, treating this problem as a regression problem. We will first load the required packages, clean and explore the data, and then fit various supervised learning algorithms to predict a user's rating given his/her preferences. To evaluate how close our predictions are to values in the test set, we will be using the Root Mean Square Error (RMSE).
+1. userId
+2. movieId
+3. rating
+4. timestamp 
+5. title
+6. genres
+
+The goal of this project is to predict the movie ratings of an individual with preferences as suggested by the predictor variables in the dataset.
+
+We will train a supervised learning algorithm on the training subset to predict movie ratings in the validation set, treating this problem as a regression problem. We will first load the required packages, clean and explore the data, and then fit various supervised learning algorithms to predict a user's rating given his/her preferences. To evaluate how close our predictions are to values in the test set, we will be using the Root Mean Square Error (RMSE).
 
 
 ## Methods/Analysis
@@ -106,11 +115,12 @@ n_distinct(edx$movieId)
 n_distinct(edx$genres)
 n_distinct(edx$userId)
 ```
-As we can see, we have a data table with the six factors userId, movieId, rating, timestamp, title, and genres. After counting using n_distinct, we  have 10,677 distinct movies, 797 distinct genres, 69,878 distinct users. Additionally, userId, movieId, timestamp, and rating are quantitative variables; title and genres are categorical.
+
+As we can see, we have a data table with these six factors: userId, movieId, rating, timestamp, title, and genres. After counting using n_distinct, we  have 10,677 distinct movies, 797 distinct genres, 69,878 distinct users. Additionally, userId, movieId, timestamp, and rating are quantitative variables; title and genres are categorical.
 
 Now we can explore relationships between the aforementioned variables using ggplot2. We can observe a few trends for each variable to help us hypothesize which variables are most predictive of movie preference.
 
-#### userId
+### userId
 
 ```{r}
 edx %>%
@@ -121,9 +131,10 @@ edx %>%
   ggtitle("Number of Ratings by userId")
 
 ```
-The histogram above is skewed right. This could suggest a few relationships. It is possible that some users use the rating site to only post a few good or bad reviews, which can affect the prediction. it is also possible that some users see more movies than others, also affecting the prediction.
 
-#### movieId
+The histogram above is skewed right. This could suggest a few relationships. It is possible that some users use the rating site to only post a few good or bad reviews. Some users might only post ratings when they really like or dislike a movie. Some users see more movies than others, and their ratings might be important for the prediction.
+
+### movieId
 
 ```{r}
 edx %>%
@@ -133,9 +144,10 @@ edx %>%
   scale_x_log10() + 
   ggtitle("Number of Ratings by movieId")
 ```
+
 Some movies in the histogram seem to be outliers as they have only been rated a few times, and could be less significant than those with more reviews. Note that this is log10 scaled.
 
-#### timestamp
+### timestamp
 
 We can use the stringi package and regex to locate the year sequence in the title column of each instance. Since some titles have parenthesis/years, we can use str_sub (substring) additionally to make it more accurate. Let's do this for both the test set and the train set.
 
@@ -150,17 +162,19 @@ edx %>%
   labs(title="Movie Age vs Rating", x="Age", y="Rating") +
   geom_point()
 ```
+
 It appears from this plot that more recent movies are generally rated lower than older ones. Additionally, there are a few outliers in which older movies were rated lower. This seems to be a fairly significant trend.
 
-#### rating
+### rating
 
 ```{r}
 qplot(as.vector(edx$rating)) +
   ggtitle("Number of Ratings of Each Rating")
 ```
+
 The majority of the movies fall under whole numbers ranging from 0.5 to 5 (inclusive), although there are a few increments of 0.5.
 
-#### Genre
+### genres
 
 Genre is a categorical variable with many different states. It can be hypothesized that users' interest in a genre would affect their rating. We will examine the distribution of rankings below.
 
@@ -295,11 +309,14 @@ prp(model_4, roundint=F, digits=3)
 ```
 
 We will use this model to predict ratings for the validation data and analyze the RMSE.
+
 ```{r}
 dt_pred <- predict(model_4, newdata=validation)
 rmse_model_4 <- RMSE(dt_pred, validation$rating)
 rmse_model_4
 ```
+
+This nonlinear model performed rather poorly compared to the previous regressions, despite the tree having many splits of different variables.
 
 ### Model 5 - Matrix Factorization Using Recosystem
 
@@ -317,12 +334,13 @@ mf_pred <- r$predict(test_data, out_memory())
 rmse_model_5 <- RMSE(mf_pred, validation$rating)
 rmse_model_5
 ```
-This RMSE is significantly lower than the other methods.
+
+This RMSE is significantly lower than the other methods. By using latent factors and factorizing the outcome matrix, we were able to get an accurate recommender system with a RMSE under our target value of 0.8649.
 
 
 ## Results
 
-Initially we used the expected value of all ratings (3.5125) and mean rating of a movie  to generate a predicted value of a rating, giving us a RMSE of 0.94. We then added the mean ratings of individual users giving us the RMSE of 0.86. After adding the age effect the RMSE decreased slightly but remained at 0.86 after rounding. Using all of these predictive variables combines user-based and item-based collaborative filtering, as well as content-based filtering; ratings are suggested as a function of how all users rated a movie (movie effect/item-based collaborative filtering), as a function of how the user likes movies in general (user effect/user-based collaborative filtering), and as a function of the movie itself (content-based). We threw in some more complex algorithms used for regression type problems, including decision tree and matrix factorization, resulting in our lowest RMSE being found using matrix factorization.
+Let's generate a table summarizing the RMSE of all the models.
 
 ```{r}
 tab <- matrix(c(rmse_model_1, rmse_model_2, rmse_model_3, rmse_model_4, rmse_model_5), ncol = 1, byrow = TRUE)
@@ -332,9 +350,10 @@ tab <- as.table(tab)
 tab
 ```
 
+Initially we used the expected value of all ratings (3.5125) and mean rating of a movie  to generate a predicted value of a rating, giving us a RMSE of 0.94. We then added the mean ratings of individual users giving us the RMSE of 0.86. After adding the age effect the RMSE decreased slightly but remained at 0.86 after rounding. Using all of these predictive variables combines user-based and item-based collaborative filtering, as well as content-based filtering; ratings are suggested as a function of how all users rated a movie (movie effect/item-based collaborative filtering), as a function of how the user likes movies in general (user effect/user-based collaborative filtering), and as a function of the movie itself (content-based). We threw in some more complex algorithms used for regression type problems, including decision tree and matrix factorization, resulting in our lowest RMSE being found using matrix factorization.
 
 ## Conclusion
 
-In this project, we used the 10M MovieLens dataset and fitted a recommendation system on the edx test set. We measured the accuracy of algorithms tested using root-mean-square error. We trained a recommendation system based on the movie effect, movie + user effect, movie + user + age effect, regression tree, and matrix factorization. We were able to generate a final RMSE of 0.82, far lower than our target value of 0.8649.
+In this project, we used the 10M MovieLens dataset and fitted a recommendation system on the edx test set. We measured the accuracy of algorithms tested using the root mean square error. We trained a recommendation system based on the movie effect, movie + user effects, movie + user + age effects, regression tree, and matrix factorization. We were able to generate a final RMSE of 0.82, far lower than our target value of 0.8649.
 
 Movie recommendation systems have been a textbook example of recommender systems, publicized particularly by the Netflix Prize. While we worked with four main factors in this inquiry: "userId", "movieId", "rating", "timestamp" further work toward movie recommender systems could evaluate the "title" and "genres", perhaps performing text mining or encoding genres to be analyzed as categories. Further analysis could also look at the relationship between various subcategories of movies (i.e. some movies could be longer/shorter or there could be sequels that users enjoy).
